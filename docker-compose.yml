@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: reconciliation
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports: [ "5432:5432" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U app -d reconciliation" ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  sftp:
+    image: atmoz/sftp:alpine
+    # user:pass:uid — the batch app polls /upload for the nightly file drop.
+    command: supplier:supplier:1001
+    ports: [ "2222:22" ]
+    # TODO(fill): mount ./sample-data into /home/supplier/upload with a generated file.
+
+  # TODO(fill): batch-integration app — build: .  depends_on: [ postgres, sftp ]
