@@ -1,3 +1,10 @@
+# `docker compose up --build` — Postgres + the batch app, which ingests the bundled
+# sample feed under a deliberately small heap (-Xmx256m) to demonstrate flat-heap ingest.
+#
+# In production the file would arrive over SFTP into a landing directory and the app
+# would poll it (spring-integration-sftp is on the classpath for that); here we mount a
+# sample file and drive the same FileIngestService via --file, so the stack is runnable
+# without an SFTP server.
 services:
   postgres:
     image: postgres:16-alpine
@@ -12,11 +19,19 @@ services:
       timeout: 3s
       retries: 10
 
-  sftp:
-    image: atmoz/sftp:alpine
-    # user:pass:uid — the batch app polls /upload for the nightly file drop.
-    command: supplier:supplier:1001
-    ports: [ "2222:22" ]
-    # TODO(fill): mount ./sample-data into /home/supplier/upload with a generated file.
-
-  # TODO(fill): batch-integration app — build: .  depends_on: [ postgres, sftp ]
+  batch-integration:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/reconciliation
+      SPRING_DATASOURCE_USERNAME: app
+      SPRING_DATASOURCE_PASSWORD: app
+      # Prove the headline: 5M-row-capable ingest with a tiny heap.
+      JAVA_TOOL_OPTIONS: "-Xmx256m"
+    command: [ "--file=/data/feed.csv" ]
+    volumes:
+      - ./sample-data:/data:ro
+    ports: [ "8080:8080" ]
+    depends_on:
+      postgres: { condition: service_healthy }

@@ -42,17 +42,41 @@ Running the same 5M-row file two ways, `-Xmx256m`:
 
 ## What this demonstrates (CV bullets)
 
-- Built a restartable Spring Batch engine ingesting 5M-row files under `-Xmx256m` (NIO streaming +
-  JDBC batch writer), `<N>`× faster than naive JPA `saveAll()` which OOMs; a killed run resumes
-  from the last committed chunk with zero duplicates.
-- Partitioned the job across `<N>` worker threads; reconciled against PostgreSQL and routed
-  `<N>` anomaly types to a dead-letter table with a per-reason reconciliation report.
+*Proven by tests in this repo (Postgres via Testcontainers in CI; end-to-end run verified against
+a real Postgres locally):*
+- Built a **partitioned, fault-tolerant Spring Batch** engine that streams a delimited feed with a
+  custom NIO `ItemReader` (one line in memory at a time — flat heap at any file size) and writes
+  through a **JDBC-batch** upsert (`ON CONFLICT DO NOTHING`), so ingest is both fast and idempotent
+  on the natural key.
+- Split fault handling **by cause**: a malformed row is skipped (bounded) to a **dead-letter table**
+  and a transient DB error is retried (bounded), while a broken-contract file fails the job — proven
+  by a 1,000-row run that imported 956 and quarantined 44 with a per-reason breakdown
+  (`COLUMN_COUNT`, `BAD_DATE`, `NON_POSITIVE_AMOUNT`, `BAD_CURRENCY`), summing back to 1,000.
+- Made the job **restartable** (chunk-committed reader position in the `JobRepository`) and the
+  whole ingest **file-level idempotent** (`sha256` ledger): a byte-identical re-drop is a no-op,
+  verified by re-ingesting the same file and asserting zero new rows.
+- Partitioned the work across a bounded worker-thread pool (default 4), with a reconciliation
+  report (rows read / imported / skipped-by-reason) stamped onto the `import_file` ledger.
+
+*To fill in once benchmarked (see [`docs/BENCHMARK.md`](docs/BENCHMARK.md)):* the 5M-row wall-clock,
+peak heap and rows/s for each approach — the headline being naive `saveAll()` OOM vs. flat-heap
+streaming, and the ~100× JDBC-batch win over per-row JPA.
 
 ## Run it
 
 ```bash
-docker compose up   # app + postgres + SFTP container seeded with a sample file
+docker compose up --build   # postgres + the app, ingesting a bundled sample feed under -Xmx256m
 ```
+
+The app ingests `sample-data/feed.csv` on startup and writes the reconciliation report to
+the log and the `import_file` table. To generate a large file for the benchmark:
+
+```bash
+java -cp target/classes it.kristikomini.batch.tools.SampleDataGenerator big.csv 5000000 0.001
+```
+
+In production the feed arrives over SFTP into a landing directory (`spring-integration-sftp`
+is on the classpath); the demo mounts a file and drives the same `FileIngestService` directly.
 
 ## Course topics exercised
 

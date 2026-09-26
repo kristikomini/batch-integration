@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: batch-integration
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/reconciliation}
+    username: ${SPRING_DATASOURCE_USERNAME:app}
+    password: ${SPRING_DATASOURCE_PASSWORD:app}
+    hikari:
+      # The partition threads each need a connection; keep the pool >= grid size + a little headroom.
+      maximum-pool-size: ${SPRING_DATASOURCE_MAX_POOL:8}
+
+  jpa:
+    hibernate:
+      # Flyway owns the schema; Hibernate only validates it (never mutates it). See ENGINEERING-STANDARDS.
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    enabled: true
+
+  batch:
+    jdbc:
+      # Spring Batch's own metadata tables (JobRepository) — created here, our tables via Flyway.
+      initialize-schema: always
+    job:
+      # Do NOT auto-run the job on startup; FileIngestService launches it with the right parameters.
+      enabled: false
+
+# Job tuning — all overridable per environment / for the benchmark.
+reconciliation:
+  grid-size: ${RECONCILIATION_GRID_SIZE:4}
+  chunk-size: ${RECONCILIATION_CHUNK_SIZE:1000}
+  skip-limit: ${RECONCILIATION_SKIP_LIMIT:10000}
+  retry-limit: ${RECONCILIATION_RETRY_LIMIT:3}
+  has-header: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus, metrics
+  metrics:
+    tags:
+      application: batch-integration
+
+logging:
+  level:
+    it.kristikomini.batch: INFO
