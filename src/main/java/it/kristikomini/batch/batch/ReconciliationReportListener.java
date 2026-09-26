@@ -36,8 +36,18 @@ public class ReconciliationReportListener implements JobExecutionListener {
         String sourceFile = jobExecution.getJobParameters().getString("filePath");
         String sha256 = jobExecution.getJobParameters().getString("sha256");
 
+        // A partitioned step reports BOTH a manager StepExecution (whose counts already aggregate
+        // the workers) and one StepExecution per worker. Summing all of them would double-count, so
+        // we sum only the worker executions (their names carry the ":partition-N" suffix); if the
+        // job is not partitioned, there are no such names and we sum every step.
+        boolean partitioned = jobExecution.getStepExecutions().stream()
+                .anyMatch(s -> s.getStepName().contains(":partition"));
+
         long read = 0, written = 0, skipped = 0;
         for (StepExecution step : jobExecution.getStepExecutions()) {
+            if (partitioned && !step.getStepName().contains(":partition")) {
+                continue; // skip the manager step to avoid double-counting
+            }
             read += step.getReadCount();
             written += step.getWriteCount();
             // process-skips + read-skips + write-skips = every quarantined row
@@ -53,8 +63,12 @@ public class ReconciliationReportListener implements JobExecutionListener {
                  WHERE sha256 = ?
                 """, status, read, written, skipped, sha256);
 
-        log.info("Reconciliation report for {}: status={} read={} imported={} skipped={}",
-                sourceFile, status, read, written, skipped);
+        long durationMs = (jobExecution.getStartTime() == null) ? -1
+                : java.time.Duration.between(jobExecution.getStartTime(), java.time.LocalDateTime.now()).toMillis();
+        long rowsPerSec = durationMs > 0 ? (read * 1000L / durationMs) : -1;
+
+        log.info("Reconciliation report for {}: status={} read={} imported={} skipped={} durationMs={} rowsPerSec={}",
+                sourceFile, status, read, written, skipped, durationMs, rowsPerSec);
 
         if (skipped > 0) {
             List<Map<String, Object>> byReason = jdbc.queryForList("""
