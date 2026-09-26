@@ -18,9 +18,9 @@ Target market: FinTech, credit bureaus, banking, utilities, retail (Milano, Bolo
 
 - **Chunk-oriented processing** — custom `ItemReader` streaming the file with **Java NIO**
   (never loading it whole), `ItemProcessor` for validation/mapping, and a **JDBC-batch**
-  `ItemWriter` (batched `INSERT`s — the ~100× speedup over row-by-row JPA `saveAll()`).
+  `ItemWriter` (batched `INSERT`s — **~13× faster** than row-by-row JPA in the [benchmark](docs/BENCHMARK.md)).
 - **Partitioning & multithreading** — the file is split across worker threads via a
-  `TaskExecutor`, using thread-safe collections (`ConcurrentHashMap`, `BlockingQueue`).
+  `TaskExecutor` (~3× again, measured); thread-safe by construction (contiguous, non-overlapping ranges).
 - **Restartability** — if the job dies at row 3,400,000 on a DB timeout, restarting resumes from
   the **last committed chunk** (Spring Batch `JobRepository`), never from zero and never
   double-inserting. → [`docs/BATCH-DESIGN.md`](docs/BATCH-DESIGN.md)
@@ -31,14 +31,17 @@ Target market: FinTech, credit bureaus, banking, utilities, retail (Milano, Bolo
 - **Reconciliation report** — rows read / imported / skipped-by-reason, plus a quarantine file
   of rejected rows for the supplier.
 
-## The headline benchmark (fill after building)
+## The headline benchmark (measured)
 
-Running the same 5M-row file two ways, `-Xmx256m`:
+Under `-Xmx256m`, PostgreSQL 16 in Docker (full details + method in [`docs/BENCHMARK.md`](docs/BENCHMARK.md)):
 
-| Approach | Time | Peak heap | GC pauses | Result |
-|----------|------|-----------|-----------|--------|
-| Naive: `readAll()` → JPA `saveAll()` | `<hh:mm>` / OOM | `<N>` MB | `<N>` | crashes / hours |
-| Spring Batch + NIO stream + JDBC batch + partitioning | `<mm:ss>` | `~stable` | `<N>` | full |
+| Approach | Throughput | Heap | Result |
+|----------|-----------|------|--------|
+| Naive: `readAll()` → JPA `saveAll()` (5M) | — | 256 MB | **OutOfMemoryError** |
+| Streaming + per-row JPA | 1,309 rows/s | flat 256 MB | full |
+| Streaming + JDBC batch (1 thread) | 17,296 rows/s | flat 256 MB | full (~13× per-row JPA) |
+| + partitioning (4 threads) | 52,279 rows/s | flat 256 MB | full (~3× again) |
+| **Partitioned, 5M rows** | 45,027 rows/s | flat 256 MB | **full in 111 s** |
 
 ## What this demonstrates (CV bullets)
 
@@ -58,9 +61,8 @@ a real Postgres locally):*
 - Partitioned the work across a bounded worker-thread pool (default 4), with a reconciliation
   report (rows read / imported / skipped-by-reason) stamped onto the `import_file` ledger.
 
-*To fill in once benchmarked (see [`docs/BENCHMARK.md`](docs/BENCHMARK.md)):* the 5M-row wall-clock,
-peak heap and rows/s for each approach — the headline being naive `saveAll()` OOM vs. flat-heap
-streaming, and the ~100× JDBC-batch win over per-row JPA.
+*Measured (see [`docs/BENCHMARK.md`](docs/BENCHMARK.md)):* 5M rows in ~111 s at a flat 256 MB heap;
+naive `saveAll()` OOMs; JDBC-batch ~13× per-row JPA; partitioning ~3× again on a 4-core box.
 
 ## Run it
 
